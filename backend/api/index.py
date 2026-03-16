@@ -10,6 +10,7 @@ app.add_middleware(
     allow_origins=["*"],  # or specific origins
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 # Include your router
