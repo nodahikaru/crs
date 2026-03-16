@@ -1,4 +1,4 @@
-const BASE = "https://proxy.corsfix.com/?https://crs-2y4ydwa4w-like365hondais-projects.vercel.app";
+const BASE = "https://crs-4x319ckwf-like365hondais-projects.vercel.app";
 
 export interface UploadResult {
   job_id: string;
