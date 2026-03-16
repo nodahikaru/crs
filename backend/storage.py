@@ -82,11 +82,6 @@ def upload_files_to_s3(job_id: str):
             relative_path = os.path.relpath(local_path, local_folder)
             s3_key = os.path.join(s3_folder, relative_path).replace("\\", "/")
             s3.upload_file(local_path, bucket_name, s3_key)
-    
-    try:
-        shutil.rmtree(local_folder)
-    except Exception as e:
-        print(f"Error deleting local folder: {e}")
 
 def upload_mapping_files_to_s3(job_id: str):
     local_folder = 'outputs'
@@ -103,7 +98,9 @@ def upload_mapping_files_to_s3(job_id: str):
         else:
             print(f"File not found, skipping: {local_path}")
 
+def delete_local_files():
     try:
-        shutil.rmtree(local_folder)
+        shutil.rmtree("outputs")
+        shutil.rmtree("uploads")
     except Exception as e:
         print(f"Error deleting local folder: {e}")

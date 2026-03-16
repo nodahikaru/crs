@@ -20,6 +20,7 @@ from extractors.word_extractor import extract_word_nodes
 from matcher.embedder import Embedder
 from matcher.scorer import compute_mapping
 from injector.idml_injector import build_english_idml
+from storage import delete_local_files
 
 from concurrent.futures import ThreadPoolExecutor
 router = APIRouter()
@@ -85,8 +86,8 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         msg = f"完了 — {total}件マッチング (LOW_CONF: {low_conf}件) | 処理時間: {duration_str}"
 
         set_job_status(job_id, "completed", msg, output_filename)
-        #upload_files_to_s3(job_id)
-        #upload_mapping_files_to_s3(job_id)
+        upload_files_to_s3(job_id)
+        upload_mapping_files_to_s3(job_id)
 
     except Exception as e:
         traceback.print_exc()
@@ -108,6 +109,8 @@ async def upload_files(
     idml_path = save_upload(idml_bytes, idml_file.filename or "input.idml", job_id)
     word_path = save_upload(word_bytes, word_file.filename or "input.docx", job_id)
 
+    delete_local_files()
+    
     set_job_status(job_id, "processing", "パイプライン開始...")
 
     # Run pipeline in background
@@ -136,7 +139,7 @@ async def download_idml(job_id: str):
     idml_path = get_idml_output_path(job_id)
     if not os.path.exists(idml_path):
         raise HTTPException(status_code=404, detail="IDML output not found")
-
+    
     return FileResponse(
         idml_path,
         media_type="application/octet-stream",
