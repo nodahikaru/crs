@@ -85,16 +85,12 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         msg = f"完了 — {total}件マッチング (LOW_CONF: {low_conf}件) | 処理時間: {duration_str}"
 
         set_job_status(job_id, "completed", msg, output_filename)
-        upload_files_to_s3(job_id)
-        upload_mapping_files_to_s3(job_id)
+        #upload_files_to_s3(job_id)
+        #upload_mapping_files_to_s3(job_id)
 
     except Exception as e:
         traceback.print_exc()
         set_job_status(job_id, "error", str(e))
-
-@router.get("/api/health")
-def health_check():
-    return {"status": "ok"}
 
 @router.post("/api/upload", response_model=UploadResponse)
 async def upload_files(

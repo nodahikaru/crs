@@ -14,8 +14,4 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-@app.get("/")
-def root():
-    return {"message": "Hello World"}
-
 app.include_router(router)
