@@ -1,4 +1,4 @@
-const BASE = "http://localhost:8000";
+const BASE = "https://crs-git-main-like365hondais-projects.vercel.app/";
 
 export interface UploadResult {
   job_id: string;
