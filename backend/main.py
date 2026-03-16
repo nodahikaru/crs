@@ -9,7 +9,7 @@ app = FastAPI(title="Concise IR Report System", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "https://crs-mmj4-dd6jq2e5g-like365hondais-projects.vercel.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
