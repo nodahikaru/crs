@@ -92,6 +92,9 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         traceback.print_exc()
         set_job_status(job_id, "error", str(e))
 
+@router.get("/")
+def root():
+    return "Hello World"
 
 @router.post("/api/upload", response_model=UploadResponse)
 async def upload_files(
