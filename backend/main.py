@@ -15,15 +15,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.options("/{full_path:path}")
-async def preflight_handler(full_path: str, request: Request):
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
+@app.get("/")
+def root():
+    return {"message": "Hello World"}
 
 app.include_router(router)
