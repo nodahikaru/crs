@@ -99,6 +99,7 @@ async def upload_files(
     idml_file: UploadFile = File(...),
     word_file: UploadFile = File(...),
 ):
+    delete_local_files()
     """Accept IDML + Word files, start matching pipeline in background."""
     job_id = str(uuid.uuid4())[:8]
 
@@ -109,8 +110,8 @@ async def upload_files(
     idml_path = save_upload(idml_bytes, idml_file.filename or "input.idml", job_id)
     word_path = save_upload(word_bytes, word_file.filename or "input.docx", job_id)
 
-    delete_local_files()
     
+
     set_job_status(job_id, "processing", "パイプライン開始...")
 
     # Run pipeline in background
