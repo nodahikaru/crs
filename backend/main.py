@@ -12,7 +12,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "http://localhost:5173", 
-        "https://crs-mmj4-dd6jq2e5g-like365hondais-projects.vercel.app"
+        "https://crs-2y4ydwa4w-like365hondais-projects.vercel.app",
+        "https://crs-mmj4-npntdyja7-like365hondais-projects.vercel.app"
     ],
     allow_methods=["*"],
     allow_headers=["*"],
