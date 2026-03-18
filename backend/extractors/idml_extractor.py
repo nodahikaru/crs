@@ -23,6 +23,36 @@ class IdmlTextNode:
 ACE_RE = re.compile(r'<\?ACE\s+\d+\?>')
 
 
+def _content_segments(content_elem) -> list[str]:
+    """Split a <Content> element on embedded <?ACE N?> processing instructions.
+
+    lxml represents PI nodes as children of the element, with the surrounding
+    text split across .text (before first PI) and each PI's .tail (after it).
+    Each ACE marker acts as a paragraph-level separator in InDesign, so we
+    return one cleaned string per segment.
+    """
+    segments: list[str] = []
+
+    first = (content_elem.text or '').strip()
+    if first:
+        segments.append(first)
+
+    for child in content_elem:
+        tail = (child.tail or '').strip()
+        if tail:
+            segments.append(tail)
+
+    return segments
+
+# Matches text that contains at least one letter (Latin or CJK/kana)
+_HAS_LETTER_RE = re.compile(r'[A-Za-z\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]')
+
+
+def _is_numeric_symbol_only(text: str) -> bool:
+    """Return True if text contains no letters — only digits, %, punctuation, etc."""
+    return not bool(_HAS_LETTER_RE.search(text))
+
+
 def split_japanese_sentences(text: str) -> list[str]:
     """Split Japanese text into sentence-level chunks, keeping delimiters."""
     if not text:
@@ -59,11 +89,23 @@ def _extract_paragraphs_from_story(story_elem) -> list[tuple[str, str]]:
                     child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
 
                     if child_tag == 'Content':
-                        text = child.text or ''
-                        # Strip ACE processing instructions
-                        text = ACE_RE.sub('', text)
-                        if text:
-                            current_text_parts.append(text)
+                        # Each ACE PI inside Content acts as a paragraph
+                        # separator; split on PI boundaries rather than
+                        # stripping them so *3 / TSR: / body become distinct.
+                        segs = _content_segments(child)
+                        if not segs:
+                            pass
+                        elif len(segs) == 1:
+                            current_text_parts.append(segs[0])
+                        else:
+                            # First segment belongs to the current paragraph
+                            current_text_parts.append(segs[0])
+                            # Remaining segments each start a new paragraph
+                            for seg in segs[1:]:
+                                joined = ''.join(current_text_parts).strip()
+                                if joined:
+                                    paragraphs.append((joined, style))
+                                current_text_parts = [seg]
 
                     elif child_tag == 'Br':
                         # Paragraph break - flush current text
@@ -71,19 +113,17 @@ def _extract_paragraphs_from_story(story_elem) -> list[tuple[str, str]]:
                         if joined:
                             paragraphs.append((joined, style))
                         current_text_parts = []
-
-            elif csr_tag == 'Table':
-                # Extract text from table cells
-                for cell in csr.findall('.//{*}Cell'):
-                    cell_texts = []
-                    for content in cell.findall('.//{*}Content'):
-                        t = content.text or ''
-                        t = ACE_RE.sub('', t)
-                        if t:
-                            cell_texts.append(t)
-                    cell_text = ''.join(cell_texts).strip()
-                    if cell_text:
-                        paragraphs.append((cell_text, style))
+                    elif child_tag == 'Table':          # ← moved here, inside CSR loop
+                        for cell in child.findall('.//Cell'):
+                            cell_texts = []
+                            for content in cell.findall('.//Content'):
+                                t = content.text or ''
+                                t = ACE_RE.sub('', t)
+                                if t:
+                                    cell_texts.append(t)
+                            cell_text = ''.join(cell_texts).strip()
+                            if cell_text and not _is_numeric_symbol_only(cell_text):
+                                paragraphs.append((cell_text, style))
 
         # Remaining text after last Br in this ParagraphStyleRange
         joined = ''.join(current_text_parts).strip()

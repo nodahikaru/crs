@@ -16,6 +16,70 @@ from lxml import etree
 
 ACE_RE = re.compile(r'<\?ACE\s+\d+\?>')
 
+
+def _content_segments(content_elem) -> list[str]:
+    """Split a <Content> element on embedded <?ACE N?> processing instructions.
+
+    Returns one cleaned string per segment delimited by ACE PIs.
+    """
+    segments: list[str] = []
+
+    first = (content_elem.text or '').strip()
+    if first:
+        segments.append(first)
+
+    for child in content_elem:
+        tail = (child.tail or '').strip()
+        if tail:
+            segments.append(tail)
+
+    return segments
+
+
+class _PITailProxy:
+    """Write-target proxy for a ProcessingInstruction's tail text.
+
+    Allows _apply_injection to write back to a PI tail using the same
+    ``obj.text = value`` interface it uses for Content elements.
+    """
+    __slots__ = ('_pi',)
+
+    def __init__(self, pi_elem) -> None:
+        self._pi = pi_elem
+
+    @property
+    def text(self) -> str:
+        return self._pi.tail or ''
+
+    @text.setter
+    def text(self, value: str) -> None:
+        self._pi.tail = value
+
+
+def _iter_content_write_targets(csr, content_elem):
+    """Yield (csr, write_target) pairs for each ACE-delimited text segment.
+
+    The first segment uses the Content element itself (writes to .text).
+    Subsequent segments use _PITailProxy wrappers (writes to PI .tail).
+    Only yields pairs where the segment has non-empty text.
+    """
+    first = (content_elem.text or '').strip()
+    if first:
+        yield csr, content_elem
+
+    for child in content_elem:
+        tail = (child.tail or '').strip()
+        if tail:
+            yield csr, _PITailProxy(child)
+
+# Matches text that contains at least one letter (Latin or CJK/kana)
+_HAS_LETTER_RE = re.compile(r'[A-Za-z\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]')
+
+
+def _is_numeric_symbol_only(text: str) -> bool:
+    """Return True if text contains no letters — only digits, %, punctuation, etc."""
+    return not bool(_HAS_LETTER_RE.search(text))
+
 # CMYK cyan for LOW_CONF highlighting
 CYAN_COLOR_SELF = "Color/C=100 M=0 Y=0 K=0"
 CYAN_COLOR_NAME = "LOW_CONF_Cyan"
@@ -170,54 +234,67 @@ def _inject_story(
                     child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
 
                     if child_tag == 'Content':
-                        text = child.text or ''
-                        cleaned = ACE_RE.sub('', text)
-                        if cleaned:
-                            current_segment.append((csr, child))
+                        # Iterate ACE-delimited segments; flush at each boundary
+                        # so every segment becomes its own logical paragraph,
+                        # matching the extractor's node splitting.
+                        write_targets = list(_iter_content_write_targets(csr, child))
+                        if not write_targets:
+                            pass
+                        elif len(write_targets) == 1:
+                            current_segment.append(write_targets[0])
+                        else:
+                            # First segment joins current paragraph
+                            current_segment.append(write_targets[0])
+                            # Each subsequent segment is a new paragraph
+                            for wt in write_targets[1:]:
+                                _flush_current_segment()
+                                current_segment.append(wt)
 
                     elif child_tag == 'Br':
                         _flush_current_segment()
 
-            elif csr_tag == 'Table':
-                for cell in csr.findall('.//{*}Cell'):
-                    cell_contents = []
-                    for content in cell.findall('.//{*}Content'):
-                        t = ACE_RE.sub('', content.text or '')
-                        if t:
-                            csr_parent = content.getparent()
-                            cell_contents.append((csr_parent, content))
-                    if cell_contents:
-                        cell_text = ''.join(
-                            ACE_RE.sub('', c.text or '') for _, c in cell_contents
-                        ).strip()
-                        if len(cell_text) >= min_text_length:
-                            # Table cell sentence split may not have paragraph index, but we treat as single para
-                            paragraph_mappings = {
-                                sidx: m
-                                for (pidx, sidx), m in mappings_for_story.items()
-                                if pidx == para_idx
-                            }
-                            sentences = split_japanese_sentences(cell_text)
-                            replaced = []
-                            low_conf = False
-                            for sidx, sent in enumerate(sentences):
-                                mapping = paragraph_mappings.get(sidx)
-                                if mapping:
-                                    replaced.append(mapping.en_text)
-                                    low_conf = low_conf or mapping.low_conf
-                                else:
-                                    replaced.append(sent)
+                    elif child_tag == 'Table':
+                        # Flush any pending segment before processing table cells
+                        _flush_current_segment()
 
-                            merged_text = ''.join(replaced)
-                            temp_mapping = {
-                                para_idx: InjectionMapping(
-                                    ja_node_id=f"{para_idx}",
-                                    en_text=merged_text,
-                                    low_conf=low_conf,
-                                )
-                            }
-                            _apply_injection(cell_contents, para_idx, temp_mapping)
-                            para_idx += 1
+                        for cell in child.findall('.//Cell'):
+                            cell_contents = []
+                            for content in cell.findall('.//Content'):
+                                t = ACE_RE.sub('', content.text or '')
+                                if t:
+                                    csr_parent = content.getparent()
+                                    cell_contents.append((csr_parent, content))
+                            if cell_contents:
+                                cell_text = ''.join(
+                                    ACE_RE.sub('', c.text or '') for _, c in cell_contents
+                                ).strip()
+                                if len(cell_text) >= min_text_length and not _is_numeric_symbol_only(cell_text):
+                                    paragraph_mappings = {
+                                        sidx: m
+                                        for (pidx, sidx), m in mappings_for_story.items()
+                                        if pidx == para_idx
+                                    }
+                                    sentences = split_japanese_sentences(cell_text)
+                                    replaced = []
+                                    low_conf = False
+                                    for sidx, sent in enumerate(sentences):
+                                        mapping = paragraph_mappings.get(sidx)
+                                        if mapping:
+                                            replaced.append(mapping.en_text)
+                                            low_conf = low_conf or mapping.low_conf
+                                        else:
+                                            replaced.append(sent)
+
+                                    merged_text = ''.join(replaced)
+                                    temp_mapping = {
+                                        para_idx: InjectionMapping(
+                                            ja_node_id=f"{para_idx}",
+                                            en_text=merged_text,
+                                            low_conf=low_conf,
+                                        )
+                                    }
+                                    _apply_injection(cell_contents, para_idx, temp_mapping)
+                                    para_idx += 1
 
         if current_segment:
             joined = ''.join(

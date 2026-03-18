@@ -27,7 +27,7 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         # Step A: Extract Japanese text from IDML
         set_job_status(job_id, "processing", "IDMLからテキスト抽出中...")
         ja_nodes = extract_idml_nodes(idml_path)
-        #_save_debug_ja_nodes(job_id, ja_nodes)
+        _save_debug_ja_nodes(job_id, ja_nodes)
 
         # Step B: Extract English text from Word
         set_job_status(job_id, "processing", "Wordからテキスト抽出中...")
@@ -52,6 +52,12 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         # Step D: Matching
         set_job_status(job_id, "processing", "マッチング実行中...")
         result = compute_mapping(ja_nodes, en_nodes, ja_vecs, en_vecs)
+
+        matched_ja_ids = {m.ja_node_id for m in result.mappings}
+        unmatched = [n for n in ja_nodes if n.node_id not in matched_ja_ids]
+        print(f"Unmatched JA nodes: {len(unmatched)}")
+        for n in unmatched:
+            print(f"  {n.node_id}  order={n.global_order}  text={n.text[:40]}")
 
         # Save mapping JSON
         result_dict = result.to_dict()

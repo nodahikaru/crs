@@ -175,6 +175,28 @@ def compute_mapping(
             low_conf=total_score < low_conf_threshold,
         ))
 
+    # step 6: Add a fallback pass after greedy assignment that assigns remaining unmatched 
+    # Japanese nodes to their best still-available English candidate, ignoring top_k
+    unmatched_ja = [i for i in range(n) if i not in assigned_ja]
+    if unmatched_ja:
+        for i in unmatched_ja:
+            # Find best available English node (no top_k restriction)
+            available = [j for j in range(m) if j not in assigned_en]
+            if not available:
+                break
+            best_j = max(available, key=lambda j: total_matrix[i, j])
+            mappings.append(MappingEntry(
+                ja_node_id=ja_nodes[i].node_id,
+                en_node_id=en_nodes[best_j].node_id,
+                ja_text=ja_nodes[i].text,
+                en_text=en_nodes[best_j].text,
+                score=round(float(total_matrix[i, best_j]), 4),
+                vector_score=round(float(sim_matrix[i, best_j]), 4),
+                order_score=round(float(ord_matrix[i, best_j]), 4),
+                low_conf=True,  # always LOW_CONF since it's a fallback
+            ))
+            assigned_en.add(best_j)
+
     # Sort mappings by Japanese document order
     ja_id_to_order = {n.node_id: n.global_order for n in ja_nodes}
     mappings.sort(key=lambda m: ja_id_to_order.get(m.ja_node_id, 0))
