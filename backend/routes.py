@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from models import UploadResponse, JobStatusResponse
 from storage import (
-    save_upload, save_result, get_result_path, get_idml_output_path,
+    save_upload, save_result, save_result_low_conf_rows, get_result_low_conf_xlsx_path, get_result_path, get_idml_output_path,
     set_job_status, get_job_status,
 )
 from extractors.idml_extractor import extract_idml_nodes, _save_debug_ja_nodes
@@ -65,6 +65,7 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         # Save mapping JSON
         result_dict = result.to_dict()
         save_result(result_dict, job_id)
+        save_result_low_conf_rows(result_dict, job_id)
 
         # Step E, F, G: Inject English text into IDML and rebuild
         set_job_status(job_id, "processing", "英語IDML生成中...")
@@ -151,12 +152,12 @@ async def download_mapping(job_id: str):
     if status["status"] != "completed":
         raise HTTPException(status_code=400, detail=f"Job status: {status['status']}")
 
-    result_path = get_result_path(job_id)
+    result_path = get_result_low_conf_xlsx_path(job_id)
     if not result_path:
         raise HTTPException(status_code=404, detail="Mapping JSON not found")
 
     return FileResponse(
         result_path,
         media_type="application/json",
-        filename=f"{job_id}_mapping.json",
+        filename=f"{job_id}_low_conf.xlsx",
     )

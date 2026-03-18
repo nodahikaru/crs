@@ -2,6 +2,10 @@
 
 import json
 import os
+import csv
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import PatternFill
 
 from config import settings
 
@@ -27,10 +31,41 @@ def save_result(result: dict, job_id: str) -> str:
         json.dump(result, f, ensure_ascii=False, indent=2)
     return path
 
+def save_result_low_conf_rows(result: dict, job_id: str) -> str:
+    os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
+    path = os.path.join(settings.OUTPUT_DIR, f"{job_id}_low_conf.xlsx")
+
+    low_conf_rows = [m for m in result["mappings"] if m["low_conf"]]
+
+    wb = Workbook()
+    ws = wb.active
+    
+    headers = ["日本語", "英語"]
+    col_widths = [80, 150]
+
+    ws.append(headers)
+    for col_idx, cell in enumerate(ws[1], start=1):
+        cell.fill = PatternFill(fill_type="solid", fgColor="00FFFF")
+
+    for m in low_conf_rows:
+        ws.append([
+            m["ja_text"], m["en_text"]
+        ])
+
+    for i, width in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    wb.save(path)
+    return path
+
 
 def get_result_path(job_id: str) -> str | None:
     """Get the mapping JSON file path if it exists."""
     path = os.path.join(settings.OUTPUT_DIR, f"{job_id}_mapping.json")
+    return path if os.path.exists(path) else None
+
+def get_result_low_conf_xlsx_path(job_id: str) -> str | None:
+    path = os.path.join(settings.OUTPUT_DIR, f"{job_id}_low_conf.xlsx")
     return path if os.path.exists(path) else None
 
 
