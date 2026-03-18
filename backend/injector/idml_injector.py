@@ -348,11 +348,6 @@ def _apply_injection(
 
             # ✅ Apply styling ONLY to injected content
             if mapping.low_conf:
-                csr.set('ShadingTint', '40')
-                csr.set('ShadingType', HIGHLIGHT_SHADING_TYPE)
-                csr.set('FillColor', CYAN_COLOR_SELF)
-                csr.set('FillTint', '100')
-
                 csr.set('Underline', 'true')
                 csr.set('UnderlineColor', CYAN_COLOR_SELF)
                 csr.set('UnderlineTint', '40')
@@ -369,6 +364,23 @@ def _apply_injection(
             try:
                 new_size = float(point_size) * FONT_SHRINK_RATIO
                 csr.set('PointSize', f"{new_size:.2f}")
+            except ValueError:
+                pass
+
+        # All English replacements: reduce leading by 2pt
+        # Auto leading = PointSize * 1.2 (InDesign default)
+        leading = csr.get('Leading')
+        if leading == 'Auto' or not leading:
+            point_size = csr.get('PointSize')
+            if point_size:
+                try:
+                    auto_leading = float(point_size) * 1.2
+                    csr.set('Leading', f"{auto_leading - 2:.2f}")
+                except ValueError:
+                    pass
+        else:
+            try:
+                csr.set('Leading', f"{float(leading) - 2:.2f}")
             except ValueError:
                 pass
 

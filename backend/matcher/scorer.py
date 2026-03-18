@@ -179,12 +179,17 @@ def compute_mapping(
     # Japanese nodes to their best still-available English candidate, ignoring top_k
     unmatched_ja = [i for i in range(n) if i not in assigned_ja]
     if unmatched_ja:
+        available_mask = np.ones(m, dtype=bool)
+        for j in assigned_en:
+            available_mask[j] = False
+        
         for i in unmatched_ja:
-            # Find best available English node (no top_k restriction)
-            available = [j for j in range(m) if j not in assigned_en]
-            if not available:
+            if not available_mask.any():
                 break
-            best_j = max(available, key=lambda j: total_matrix[i, j])
+            masked = np.where(available_mask, total_matrix[i], -np.inf)
+            best_j = int(np.argmax(masked))
+            available_mask[best_j] = False
+            assigned_en.add(best_j)
             mappings.append(MappingEntry(
                 ja_node_id=ja_nodes[i].node_id,
                 en_node_id=en_nodes[best_j].node_id,
@@ -195,7 +200,6 @@ def compute_mapping(
                 order_score=round(float(ord_matrix[i, best_j]), 4),
                 low_conf=True,  # always LOW_CONF since it's a fallback
             ))
-            assigned_en.add(best_j)
 
     # Sort mappings by Japanese document order
     ja_id_to_order = {n.node_id: n.global_order for n in ja_nodes}

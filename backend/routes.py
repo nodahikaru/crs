@@ -1,6 +1,7 @@
 """API routes for the mapping pipeline."""
 
 import os
+import time
 import uuid
 import traceback
 
@@ -17,21 +18,23 @@ from extractors.word_extractor import extract_word_nodes
 from matcher.embedder import Embedder
 from matcher.scorer import compute_mapping
 from injector.idml_injector import build_english_idml
+from concurrent.futures import ThreadPoolExecutor
 
 router = APIRouter()
 
 
 def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
     """Background task: run the full matching pipeline + IDML generation."""
+    start_time = time.monotonic()
     try:
-        # Step A: Extract Japanese text from IDML
-        set_job_status(job_id, "processing", "IDMLからテキスト抽出中...")
-        ja_nodes = extract_idml_nodes(idml_path)
-        _save_debug_ja_nodes(job_id, ja_nodes)
+        # Step A, B: Extract Japanese text from IDML, Extract English text from Word
+        set_job_status(job_id, "processing", "IDML, Wordからテキスト抽出中...")
 
-        # Step B: Extract English text from Word
-        set_job_status(job_id, "processing", "Wordからテキスト抽出中...")
-        en_nodes = extract_word_nodes(word_path)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_ja = pool.submit(extract_idml_nodes, idml_path)
+            future_en = pool.submit(extract_word_nodes, word_path)
+            ja_nodes = future_ja.result()
+            en_nodes = future_en.result()
 
         if not ja_nodes:
             set_job_status(job_id, "error", "IDMLファイルからテキストが見つかりませんでした")
@@ -75,12 +78,14 @@ def _run_pipeline(job_id: str, idml_path: str, word_path: str) -> None:
         output_filename = os.path.basename(output_idml_path)
         low_conf = result_dict["metrics"]["low_conf_count"]
         total = result_dict["metrics"]["total_mappings"]
-        msg = f"完了 — {total}件マッチング (LOW_CONF: {low_conf}件)"
+        duration = time.monotonic() - start_time
+        msg = f"完了 — {total}件マッチング (LOW_CONF: {low_conf}件) [{duration:.1f}s]"
 
         set_job_status(job_id, "completed", msg, output_filename)
 
     except Exception as e:
         traceback.print_exc()
+        duration = time.monotonic() - start_time
         set_job_status(job_id, "error", str(e))
 
 
