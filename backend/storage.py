@@ -2,16 +2,8 @@
 
 import json
 import os
-import boto3
-import shutil
-from config import settings
 
-s3 = boto3.client(
-    's3',
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    region_name=os.getenv("AWS_REGION_NAME")
-)
+from config import settings
 
 # In-memory job status store (single-user local PoC)
 _jobs: dict[str, dict] = {}
@@ -67,40 +59,3 @@ def get_job_status(job_id: str) -> dict:
         "message": "Job not found",
         "result_filename": None,
     })
-
-
-def upload_files_to_s3(job_id: str):
-    local_folder = f"uploads/{job_id}"
-    bucket_name = os.getenv("AWS_S3_BUCKET")
-    s3_folder = f"{job_id}/"
-
-    # Upload files
-    for root, dirs, files in os.walk(local_folder):
-        for file in files:
-            local_path = os.path.join(root, file)
-
-            relative_path = os.path.relpath(local_path, local_folder)
-            s3_key = os.path.join(s3_folder, relative_path).replace("\\", "/")
-            s3.upload_file(local_path, bucket_name, s3_key)
-
-def upload_mapping_files_to_s3(job_id: str):
-    local_folder = 'outputs'
-    bucket_name = os.getenv("AWS_S3_BUCKET")
-    s3_folder = f"{job_id}/outputs/"
-
-    files_to_upload = [f"{job_id}_mapping.json", f"{job_id}_output.idml"]
-
-    for file_name in files_to_upload:
-        local_path = os.path.join(local_folder, file_name)
-        if os.path.exists(local_path):
-            s3_key = os.path.join(s3_folder, file_name).replace("\\", "/")
-            s3.upload_file(local_path, bucket_name, s3_key)
-        else:
-            print(f"File not found, skipping: {local_path}")
-
-def delete_local_files():
-    try:
-        shutil.rmtree("outputs")
-        shutil.rmtree("uploads")
-    except Exception as e:
-        print(f"Error deleting local folder: {e}")

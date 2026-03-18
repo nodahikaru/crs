@@ -1,8 +1,9 @@
 """Compute text embeddings using OpenAI API with in-memory caching."""
 
+import httpx
 import numpy as np
 from openai import OpenAI
-import httpx
+
 from config import settings
 
 
@@ -36,4 +37,3 @@ class Embedder:
                     self._cache[text] = data.embedding
 
         return np.array([self._cache[t] for t in texts])
-    

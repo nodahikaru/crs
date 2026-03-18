@@ -23,6 +23,17 @@ class IdmlTextNode:
 ACE_RE = re.compile(r'<\?ACE\s+\d+\?>')
 
 
+def split_japanese_sentences(text: str) -> list[str]:
+    """Split Japanese text into sentence-level chunks, keeping delimiters."""
+    if not text:
+        return []
+
+    # Keep punctuation and include it with each sentence
+    parts = re.split(r'(?<=[。？！]|\.|\?|!)\s*', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts
+
+
 def _extract_paragraphs_from_story(story_elem) -> list[tuple[str, str]]:
     """Extract paragraph texts from a Story element.
 
@@ -136,21 +147,36 @@ def extract_idml_nodes(idml_path: str, min_text_length: int = 2) -> list[IdmlTex
             paragraphs = _extract_paragraphs_from_story(story_elem)
 
             for para_idx, (text, style) in enumerate(paragraphs):
-                if len(text) < min_text_length:
-                    continue
+                sentence_texts = split_japanese_sentences(text)
 
-                node = IdmlTextNode(
-                    node_id=f"{story_id}_p{para_idx}",
-                    story_id=story_id,
-                    paragraph_index=para_idx,
-                    text=text,
-                    style=style,
-                    global_order=global_order,
-                )
-                nodes.append(node)
-                global_order += 1
+                for sent_idx, sent_text in enumerate(sentence_texts):
+                    if len(sent_text) < min_text_length:
+                        continue
+
+                    node = IdmlTextNode(
+                        node_id=f"{story_id}_p{para_idx}_s{sent_idx}",
+                        story_id=story_id,
+                        paragraph_index=para_idx,
+                        text=sent_text,
+                        style=style,
+                        global_order=global_order,
+                    )
+                    nodes.append(node)
+                    global_order += 1
 
     return nodes
+
+import json
+import os
+DEBUG_FOLDER = "debug"
+
+def _save_debug_ja_nodes(job_id: str, ja_nodes: list[IdmlTextNode]) -> None:
+    """Save Japanese nodes to debug folder as JSON."""
+    os.makedirs(DEBUG_FOLDER, exist_ok=True)
+    path = os.path.join(DEBUG_FOLDER, f"{job_id}_ja_nodes.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump([node.to_dict() for node in ja_nodes], f, ensure_ascii=False, indent=2)
+    print(f"Saved JA nodes to {path}")
 
 
 if __name__ == '__main__':

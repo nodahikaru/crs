@@ -19,6 +19,7 @@ ACE_RE = re.compile(r'<\?ACE\s+\d+\?>')
 # CMYK cyan for LOW_CONF highlighting
 CYAN_COLOR_SELF = "Color/C=100 M=0 Y=0 K=0"
 CYAN_COLOR_NAME = "LOW_CONF_Cyan"
+HIGHLIGHT_SHADING_TYPE = "Solid"
 FONT_SHRINK_RATIO = 0.85
 
 
@@ -30,10 +31,13 @@ class InjectionMapping:
     low_conf: bool        # Whether to mark as LOW_CONF (cyan)
 
 
-def _parse_node_id(node_id: str) -> tuple[str, int]:
-    """Parse 'u78f07_p3' into ('u78f07', 3)."""
-    parts = node_id.rsplit("_p", 1)
-    return parts[0], int(parts[1])
+def _parse_node_id(node_id: str) -> tuple[str, int, int | None]:
+    """Parse 'u78f07_p3_s2' into ('u78f07', 3, 2) or ('u78f07', 3, None)."""
+    story_part, rest = node_id.split("_p", 1)
+    if "_s" in rest:
+        para_str, sent_str = rest.split("_s", 1)
+        return story_part, int(para_str), int(sent_str)
+    return story_part, int(rest), None
 
 
 def _ensure_cyan_color(graphic_xml: bytes) -> bytes:
@@ -43,7 +47,7 @@ def _ensure_cyan_color(graphic_xml: bytes) -> bytes:
 
     # Check if cyan color already exists
     for color in root.iter('{*}Color'):
-        if color.get('Self') == CYAN_COLOR_SELF:
+        if color.get('Self') == CYAN_COLOR_SELF or color.get('Name') == CYAN_COLOR_NAME:
             return graphic_xml  # Already exists
 
     # Find where to insert (after existing Color elements)
@@ -51,38 +55,49 @@ def _ensure_cyan_color(graphic_xml: bytes) -> bytes:
     for elem in root.iter('{*}Color'):
         last_color = elem
 
-    if last_color is not None:
-        cyan = etree.Element('Color')
-        cyan.set('Self', CYAN_COLOR_SELF)
-        cyan.set('Model', 'Process')
-        cyan.set('Space', 'CMYK')
-        cyan.set('ColorValue', '100 0 0 0')
-        cyan.set('ConvertToHsb', 'false')
-        cyan.set('AlternateSpace', 'NoAlternateColor')
-        cyan.set('AlternateColorValue', '')
-        cyan.set('Name', CYAN_COLOR_NAME)
-        cyan.set('ColorEditable', 'true')
-        cyan.set('ColorRemovable', 'true')
-        cyan.set('Visible', 'true')
-        cyan.set('SwatchCreatorID', '7937')
+    cyan = etree.Element('Color')
+    cyan.set('Self', CYAN_COLOR_SELF)
+    cyan.set('Model', 'Process')
+    cyan.set('Space', 'CMYK')
+    cyan.set('ColorValue', '100 0 0 0')
+    cyan.set('ConvertToHsb', 'false')
+    cyan.set('AlternateSpace', 'NoAlternateColor')
+    cyan.set('AlternateColorValue', '')
+    cyan.set('Name', CYAN_COLOR_NAME)
+    cyan.set('ColorEditable', 'true')
+    cyan.set('ColorRemovable', 'true')
+    cyan.set('Visible', 'true')
+    cyan.set('SwatchCreatorID', '7937')
 
+    if last_color is not None:
         parent = last_color.getparent()
         idx = list(parent).index(last_color)
         parent.insert(idx + 1, cyan)
+    else:
+        root.append(cyan)
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone='yes')
 
 
+def split_japanese_sentences(text: str) -> list[str]:
+    if not text:
+        return []
+
+    parts = re.split(r'(?<=[。？！]|\.|\?|!)\s*', text)
+    parts = [p.strip() for p in parts if p.strip()]
+    return parts
+
+
 def _inject_story(
     story_xml: bytes,
-    mappings_for_story: dict[int, InjectionMapping],
+    mappings_for_story: dict[tuple[int, int], InjectionMapping],
     min_text_length: int = 2,
 ) -> bytes:
     """Inject English text into a single Story XML.
 
     Args:
         story_xml: Original Story XML bytes
-        mappings_for_story: dict of paragraph_index -> InjectionMapping
+        mappings_for_story: dict of (paragraph_index, sentence_index) -> InjectionMapping
         min_text_length: Minimum text length (same as extractor)
 
     Returns:
@@ -101,22 +116,55 @@ def _inject_story(
     if story_elem is None:
         return story_xml
 
-    # Walk through ParagraphStyleRanges, tracking paragraph index
-    # This must match the extraction logic exactly
     para_idx = 0
+
+    def _flush_current_segment():
+        nonlocal para_idx, current_segment
+        if not current_segment:
+            return
+
+        joined = ''.join(
+            ACE_RE.sub('', c.text or '') for _, c in current_segment
+        ).strip()
+        if len(joined) >= min_text_length:
+            paragraph_mappings = {
+                sidx: m
+                for (pidx, sidx), m in mappings_for_story.items()
+                if pidx == para_idx
+            }
+            sentences = split_japanese_sentences(joined)
+            replaced = []
+            low_conf = False
+            for sidx, sent in enumerate(sentences):
+                mapping = paragraph_mappings.get(sidx)
+                if mapping:
+                    replaced.append(mapping.en_text)
+                    low_conf = low_conf or mapping.low_conf
+                else:
+                    replaced.append(sent)
+
+            merged_text = ''.join(replaced)
+            if merged_text != joined or paragraph_mappings:
+                temp_mapping = {
+                    para_idx: InjectionMapping(
+                        ja_node_id=f"{para_idx}",
+                        en_text=merged_text,
+                        low_conf=low_conf,
+                    )
+                }
+                _apply_injection(current_segment, para_idx, temp_mapping)
+        para_idx += 1
+        current_segment = []
 
     for psr in list(story_elem):
         tag = psr.tag.split('}')[-1] if '}' in psr.tag else psr.tag
         if tag != 'ParagraphStyleRange':
             continue
 
-        # Collect paragraph segments: groups of Content elements between Br markers
-        # Each group = one paragraph
-        current_segment: list[tuple[etree._Element, etree._Element]] = []  # (csr, content)
+        current_segment: list[tuple[etree._Element, etree._Element]] = []
 
         for csr in list(psr):
             csr_tag = csr.tag.split('}')[-1] if '}' in csr.tag else csr.tag
-
             if csr_tag == 'CharacterStyleRange':
                 for child in list(csr):
                     child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
@@ -128,18 +176,9 @@ def _inject_story(
                             current_segment.append((csr, child))
 
                     elif child_tag == 'Br':
-                        # Flush paragraph
-                        if current_segment:
-                            joined = ''.join(
-                                ACE_RE.sub('', c.text or '') for _, c in current_segment
-                            ).strip()
-                            if len(joined) >= min_text_length:
-                                _apply_injection(current_segment, para_idx, mappings_for_story)
-                                para_idx += 1
-                        current_segment = []
+                        _flush_current_segment()
 
             elif csr_tag == 'Table':
-                # Handle table cells as individual paragraphs
                 for cell in csr.findall('.//{*}Cell'):
                     cell_contents = []
                     for content in cell.findall('.//{*}Content'):
@@ -152,16 +191,65 @@ def _inject_story(
                             ACE_RE.sub('', c.text or '') for _, c in cell_contents
                         ).strip()
                         if len(cell_text) >= min_text_length:
-                            _apply_injection(cell_contents, para_idx, mappings_for_story)
+                            # Table cell sentence split may not have paragraph index, but we treat as single para
+                            paragraph_mappings = {
+                                sidx: m
+                                for (pidx, sidx), m in mappings_for_story.items()
+                                if pidx == para_idx
+                            }
+                            sentences = split_japanese_sentences(cell_text)
+                            replaced = []
+                            low_conf = False
+                            for sidx, sent in enumerate(sentences):
+                                mapping = paragraph_mappings.get(sidx)
+                                if mapping:
+                                    replaced.append(mapping.en_text)
+                                    low_conf = low_conf or mapping.low_conf
+                                else:
+                                    replaced.append(sent)
+
+                            merged_text = ''.join(replaced)
+                            temp_mapping = {
+                                para_idx: InjectionMapping(
+                                    ja_node_id=f"{para_idx}",
+                                    en_text=merged_text,
+                                    low_conf=low_conf,
+                                )
+                            }
+                            _apply_injection(cell_contents, para_idx, temp_mapping)
                             para_idx += 1
 
-        # Remaining text after last Br
         if current_segment:
             joined = ''.join(
                 ACE_RE.sub('', c.text or '') for _, c in current_segment
             ).strip()
             if len(joined) >= min_text_length:
-                _apply_injection(current_segment, para_idx, mappings_for_story)
+                paragraph_mappings = {
+                    sidx: m
+                    for (pidx, sidx), m in mappings_for_story.items()
+                    if pidx == para_idx
+                }
+                sentences = split_japanese_sentences(joined)
+                replaced = []
+                low_conf = False
+                for sidx, sent in enumerate(sentences):
+                    mapping = paragraph_mappings.get(sidx)
+                    if mapping:
+                        replaced.append(mapping.en_text)
+                        low_conf = low_conf or mapping.low_conf
+                    else:
+                        replaced.append(sent)
+
+                merged_text = ''.join(replaced)
+                if merged_text != joined or paragraph_mappings:
+                    temp_mapping = {
+                        para_idx: InjectionMapping(
+                            ja_node_id=f"{para_idx}",
+                            en_text=merged_text,
+                            low_conf=low_conf,
+                        )
+                    }
+                    _apply_injection(current_segment, para_idx, temp_mapping)
                 para_idx += 1
 
     return etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone='yes')
@@ -172,34 +260,40 @@ def _apply_injection(
     para_idx: int,
     mappings: dict[int, InjectionMapping],
 ) -> None:
-    """Apply text replacement and style changes to a paragraph segment.
-
-    Args:
-        segment: list of (CharacterStyleRange, Content) element pairs
-        para_idx: Current paragraph index
-        mappings: dict of paragraph_index -> InjectionMapping
-    """
     if para_idx not in mappings:
         return
 
     mapping = mappings[para_idx]
 
-    # Put English text in the first Content element, clear the rest
     for i, (csr, content) in enumerate(segment):
         if i == 0:
             content.text = mapping.en_text
-            point_size = csr.get("PointSize")
-            if point_size:
-                try:
-                    new_size = float(point_size) * FONT_SHRINK_RATIO
-                    csr.set("PointSize", f"{new_size: .2f}")
-                except ValueError:
-                    pass
 
+            # ✅ Apply styling ONLY to injected content
             if mapping.low_conf:
+                csr.set('ShadingTint', '40')
+                csr.set('ShadingType', HIGHLIGHT_SHADING_TYPE)
                 csr.set('FillColor', CYAN_COLOR_SELF)
+                csr.set('FillTint', '100')
+
+                csr.set('Underline', 'true')
+                csr.set('UnderlineColor', CYAN_COLOR_SELF)
+                csr.set('UnderlineTint', '40')
+                csr.set('UnderlineWeight', '10')
+                csr.set('UnderlineOffset', '-2')
+                csr.set('UnderlineType', 'StrokeStyle/$ID/Solid')
+
         else:
-            content.text = ""
+            content.text = ''
+
+        # shrink still applies to all (this is fine)
+        point_size = csr.get('PointSize')
+        if point_size:
+            try:
+                new_size = float(point_size) * FONT_SHRINK_RATIO
+                csr.set('PointSize', f"{new_size:.2f}")
+            except ValueError:
+                pass
 
 
 def build_english_idml(
@@ -217,13 +311,15 @@ def build_english_idml(
     Returns:
         Path to the generated IDML file
     """
-    # Group mappings by story_id
-    story_mappings: dict[str, dict[int, InjectionMapping]] = {}
+    # Group mappings by story_id and (paragraph, sentence)
+    story_mappings: dict[str, dict[tuple[int, int], InjectionMapping]] = {}
     for m in mappings:
-        story_id, para_idx = _parse_node_id(m['ja_node_id'])
+        story_id, para_idx, sent_idx = _parse_node_id(m['ja_node_id'])
+        if sent_idx is None:
+            continue
         if story_id not in story_mappings:
             story_mappings[story_id] = {}
-        story_mappings[story_id][para_idx] = InjectionMapping(
+        story_mappings[story_id][(para_idx, sent_idx)] = InjectionMapping(
             ja_node_id=m['ja_node_id'],
             en_text=m['en_text'],
             low_conf=m.get('low_conf', False),
@@ -256,4 +352,3 @@ def build_english_idml(
                 zout.writestr(item, data)
 
     return output_idml_path
-

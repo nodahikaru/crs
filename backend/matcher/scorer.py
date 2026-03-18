@@ -47,26 +47,24 @@ def _cosine_similarity_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     Returns:
         (N, M) similarity matrix with values in [-1, 1]
     """
-    #use float32 instead of float64
-    a = a.astype(np.float32)
-    b = b.astype(np.float32)
     # Normalize rows to unit vectors
     a_norm = a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-10)
     b_norm = b / (np.linalg.norm(b, axis=1, keepdims=True) + 1e-10)
-    return np.clip(a_norm @ b_norm.T, -1.0, 1.0)
+    return a_norm @ b_norm.T
 
 
 def _order_score_matrix(
     ja_nodes: list[IdmlTextNode],
     en_nodes: list[WordTextNode],
+    sigma: float | None = None,
 ) -> np.ndarray:
-    """Compute order-based score matrix.
+    """Compute Gaussian-based order score matrix.
 
     Nodes at similar relative positions get higher scores.
-    Uses normalized positions [0, 1] and a decay function.
+    Uses normalized positions [0, 1] and Gaussian decay.
 
     Returns:
-        (N, M) matrix with values in [0, 1]
+        (N, M) matrix with values in (0, 1]
     """
     n = len(ja_nodes)
     m = len(en_nodes)
@@ -81,9 +79,13 @@ def _order_score_matrix(
     # Position difference matrix
     diff = np.abs(ja_pos[:, np.newaxis] - en_pos[np.newaxis, :])  # (N, M)
 
-    # Decay function: steeper decay for larger documents
-    scaling = max(n, m) * 0.5
-    scores = 1.0 / (1.0 + diff * scaling)
+    # Sigma controls how strict the alignment is
+    # Smaller = stricter (only near positions match)
+    # Larger = looser (more tolerance)
+    if sigma is None:
+        sigma = 0.1  # 👈 good default, tune this
+
+    scores = np.exp(-(diff ** 2) / (2 * sigma ** 2))
 
     return scores
 
@@ -157,12 +159,11 @@ def compute_mapping(
     mappings: list[MappingEntry] = []
 
     for ja_idx, en_idx, total_score, vec_score, ord_score in candidates:
-        if ja_idx in assigned_ja:
+        if ja_idx in assigned_ja or en_idx in assigned_en:
             continue
 
         assigned_ja.add(ja_idx)
         assigned_en.add(en_idx)
-
         mappings.append(MappingEntry(
             ja_node_id=ja_nodes[ja_idx].node_id,
             en_node_id=en_nodes[en_idx].node_id,
